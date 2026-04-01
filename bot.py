@@ -9,7 +9,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("8691032599:AAGPkN0GAW7djWMTrSFVfQeRh6cLf-ARo5M")
 
 URL_RE = re.compile(
     r"(?i)\b(?:https?://|www\.)\S+\b"
