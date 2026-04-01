@@ -1,7 +1,7 @@
 import os
 import re
 import logging
-from telegram import Update
+from telegram import Update, MessageEntity
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 logging.basicConfig(
@@ -11,141 +11,94 @@ logging.basicConfig(
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# Catch normal links like:
+# http://..., https://..., www...., example.com/path, t.me/...
 URL_RE = re.compile(
     r"(?i)\b(?:https?://|www\.)\S+\b"
     r"|(?<!@)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:/\S*)?\b"
 )
 
+def has_link_entities(entities) -> bool:
+    if not entities:
+        return False
 
-def strip_links(text: str | None) -> str:
-    if not text:
-        return ""
-    cleaned = URL_RE.sub("", text)
-    cleaned = re.sub(r"[ \t]+", " ", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned.strip()
+    for entity in entities:
+        if entity.type in (
+            MessageEntity.URL,
+            MessageEntity.TEXT_LINK,
+        ):
+            return True
+    return False
 
+def message_has_link(msg) -> bool:
+    if not msg:
+        return False
 
-async def clean_forwarded_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = update.channel_post or update.edited_channel_post
+    text = msg.text or ""
+    caption = msg.caption or ""
+
+    # Check Telegram-detected URL entities
+    if has_link_entities(msg.entities):
+        return True
+    if has_link_entities(msg.caption_entities):
+        return True
+
+    # Check raw text with regex
+    if text and URL_RE.search(text):
+        return True
+    if caption and URL_RE.search(caption):
+        return True
+
+    # Delete forwarded messages too if you want zero-link policy
+    if msg.forward_origin:
+        return True
+
+    return False
+
+async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
     if not msg:
         return
 
-    if not msg.forward_origin:
+    # Ignore messages sent by bots
+    if msg.from_user and msg.from_user.is_bot:
         return
 
-    chat_id = msg.chat_id
+    if not message_has_link(msg):
+        return
 
     try:
-        if msg.text is not None:
-            cleaned_text = strip_links(msg.text)
-            if cleaned_text:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=cleaned_text,
-                    disable_web_page_preview=True,
-                    protect_content=True,
-                )
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-            return
-
-        if msg.photo:
-            cleaned_caption = strip_links(msg.caption)
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=msg.photo[-1].file_id,
-                caption=cleaned_caption or None,
-                protect_content=True,
-            )
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-            return
-
-        if msg.video:
-            cleaned_caption = strip_links(msg.caption)
-            await context.bot.send_video(
-                chat_id=chat_id,
-                video=msg.video.file_id,
-                caption=cleaned_caption or None,
-                protect_content=True,
-            )
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-            return
-
-        if msg.document:
-            cleaned_caption = strip_links(msg.caption)
-            await context.bot.send_document(
-                chat_id=chat_id,
-                document=msg.document.file_id,
-                caption=cleaned_caption or None,
-                protect_content=True,
-            )
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-            return
-
-        if msg.audio:
-            cleaned_caption = strip_links(msg.caption)
-            await context.bot.send_audio(
-                chat_id=chat_id,
-                audio=msg.audio.file_id,
-                caption=cleaned_caption or None,
-                protect_content=True,
-            )
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-            return
-
-        if msg.animation:
-            cleaned_caption = strip_links(msg.caption)
-            await context.bot.send_animation(
-                chat_id=chat_id,
-                animation=msg.animation.file_id,
-                caption=cleaned_caption or None,
-                protect_content=True,
-            )
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-            return
-
-        if msg.voice:
-            cleaned_caption = strip_links(msg.caption)
-            await context.bot.send_voice(
-                chat_id=chat_id,
-                voice=msg.voice.file_id,
-                caption=cleaned_caption or None,
-                protect_content=True,
-            )
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-            return
-
-        if msg.sticker:
-            await context.bot.send_sticker(
-                chat_id=chat_id,
-                sticker=msg.sticker.file_id,
-                protect_content=True,
-            )
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-            return
-
-        await context.bot.copy_message(
-            chat_id=chat_id,
-            from_chat_id=chat_id,
-            message_id=msg.message_id,
-            protect_content=True,
+        await context.bot.delete_message(
+            chat_id=msg.chat_id,
+            message_id=msg.message_id
         )
-        await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-
+        logging.info("Deleted message with link in chat %s", msg.chat_id)
     except Exception as e:
-        logging.exception("Error while cleaning forwarded post: %s", e)
-
+        logging.exception("Failed to delete message: %s", e)
 
 def main():
     if not BOT_TOKEN:
         raise ValueError("Missing BOT_TOKEN environment variable")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(
-        MessageHandler(filters.UpdateType.CHANNEL_POSTS, clean_forwarded_channel_post)
-    )
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
+    # Group + supergroup messages (including discussion comments)
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.GROUPS & ~filters.StatusUpdate.ALL,
+            delete_link_messages
+        )
+    )
+
+    # Channel posts
+    app.add_handler(
+        MessageHandler(
+            filters.UpdateType.CHANNEL_POSTS,
+            delete_link_messages
+        )
+    )
+
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
