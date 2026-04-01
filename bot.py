@@ -54,11 +54,26 @@ def message_has_link(msg) -> bool:
     if caption and URL_RE.search(caption):
         return True
 
-    # delete forwarded posts/messages too
     if msg.forward_origin:
         return True
 
     return False
+
+async def is_admin_or_channel_message(msg, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    # Messages sent as channel / anonymous admin
+    if msg.sender_chat is not None:
+        return True
+
+    # Normal user message: check admin status in this group
+    if msg.from_user is None:
+        return False
+
+    try:
+        member = await context.bot.get_chat_member(msg.chat_id, msg.from_user.id)
+        return member.status in ("administrator", "creator")
+    except Exception as e:
+        logging.exception("Failed to check admin status: %s", e)
+        return False
 
 async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
@@ -71,12 +86,17 @@ async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message_has_link(msg):
         return
 
+    # Keep admin/channel messages
+    if await is_admin_or_channel_message(msg, context):
+        logging.info("Allowed admin/channel message in chat %s", msg.chat_id)
+        return
+
     try:
         await context.bot.delete_message(
             chat_id=msg.chat_id,
             message_id=msg.message_id,
         )
-        logging.info("Deleted message with clickable link in chat %s", msg.chat_id)
+        logging.info("Deleted user link message in chat %s", msg.chat_id)
     except Exception as e:
         logging.exception("Failed to delete message: %s", e)
 
@@ -86,7 +106,7 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # group / supergroup / discussion comments
+    # Group / supergroup / discussion comments
     app.add_handler(
         MessageHandler(
             filters.ChatType.GROUPS & ~filters.StatusUpdate.ALL,
@@ -94,7 +114,7 @@ def main():
         )
     )
 
-    # channel posts
+    # Channel posts
     app.add_handler(
         MessageHandler(
             filters.UpdateType.CHANNEL_POSTS,
