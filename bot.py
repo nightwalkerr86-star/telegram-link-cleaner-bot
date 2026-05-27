@@ -87,6 +87,10 @@ SENSITIVE_CONTENT_RE = re.compile(
     r"pussy|dick|cock|cocaine|meth|heroin|weed|marijuana|drug|gun|weapon"
     r")\b"
     r"|(?:色情|成人|成人视频|裸聊|裸照|裸|性爱|做爱|约炮|黄片|无码|淫|私房|国产自拍|偷拍视频)"
+    r"|(?:幼女|初中生|小学生|未成年|未满|未滿|萝莉|蘿莉|破处|破處|处女|處女)"
+    r"|(?:私密照|手机相册|手機相冊|邻居小女孩|鄰居小女孩|\d{1,2}\s*岁|\d{1,2}\s*歲)"
+    r"|(?:点头像|點頭像|进简介群|進簡介群|简介群|簡介群|进主页|進主頁|主页看|主頁看)"
+    r"|(?:来个弟弟|來個弟弟|陪姐姐聊聊天|有喜欢的|有喜歡的)"
     r"|(?:សិច|អាសអាភាស|អាក្រាត|រូបអាក្រាត)"
 )
 
@@ -252,6 +256,17 @@ async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if not message_should_be_filtered(msg):
+        return
+
+    if message_has_sensitive_content(msg):
+        try:
+            await context.bot.delete_message(
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+            )
+            logging.info("Deleted sensitive message in chat %s", msg.chat_id)
+        except Exception as e:
+            logging.exception("Failed to delete sensitive message: %s", e)
         return
 
     if await is_admin_message(msg, context):
