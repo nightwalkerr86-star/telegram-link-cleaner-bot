@@ -48,6 +48,10 @@ REPEAT_WINDOW_SECONDS = int(os.getenv("REPEAT_WINDOW_SECONDS", "120"))
 REPEAT_MESSAGE_LIMIT = int(os.getenv("REPEAT_MESSAGE_LIMIT", "3"))
 RECENT_MESSAGE_TTL = int(os.getenv("RECENT_MESSAGE_TTL", "180"))
 MUTE_SECONDS = int(os.getenv("MUTE_SECONDS", "86400"))
+SIMILAR_WINDOW_SECONDS = int(os.getenv("SIMILAR_WINDOW_SECONDS", "300"))
+SIMILAR_MESSAGE_LIMIT = int(os.getenv("SIMILAR_MESSAGE_LIMIT", "3"))
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.72"))
+RECENT_SIMILAR_LIMIT = int(os.getenv("RECENT_SIMILAR_LIMIT", "300"))
 
 BOT_SPAM_ACTION = os.getenv("BOT_SPAM_ACTION", "ban").lower()
 USER_SPAM_ACTION = os.getenv("USER_SPAM_ACTION", "mute").lower()
@@ -74,8 +78,13 @@ SUSPICIOUS_LINK_RE = re.compile(
     r"(?i)(?:"
     r"bit\.ly|tinyurl|t\.co|goo\.gl|ow\.ly|cutt\.ly|shorturl|"
     r"free|bonus|promo|airdrop|casino|bet|vip|adult|watch|live|"
-    r"telegram|whatsapp|crypto|usdt"
+    r"telegram|whatsapp|crypto|usdt|claim|gift|prize|token|wallet|"
+    r"login|verify|bonus|giveaway|invite|join"
     r")"
+)
+
+TELEGRAM_INVITE_RE = re.compile(
+    r"(?i)(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/(?:joinchat/|\+|c/)?[a-z0-9_+\-/]{4,}"
 )
 
 PROMOTION_KEYWORDS = (
@@ -105,6 +114,25 @@ PROMOTION_KEYWORDS = (
     "usdt",
     "loan",
     "vip",
+    "advert",
+    "advertisement",
+    "sponsored",
+    "marketing",
+    "sale",
+    "deal",
+    "giveaway",
+    "claim",
+    "prize",
+    "verify",
+    "wallet",
+    "token",
+    "trading",
+    "forex",
+    "signal",
+    "signals",
+    "double your money",
+    "passive income",
+    "guaranteed returns",
     "点击",
     "点头像",
     "链接",
@@ -131,6 +159,22 @@ PROMOTION_KEYWORDS = (
     "下注",
     "开奖",
     "偷拍",
+    "广告",
+    "推广",
+    "折扣",
+    "促销",
+    "特价",
+    "送彩金",
+    "注册送",
+    "空投",
+    "合约",
+    "币圈",
+    "稳赚",
+    "翻倍",
+    "收益",
+    "理财",
+    "开户注册",
+    "开户链接",
 )
 
 PROMOTION_PHRASES = (
@@ -145,11 +189,61 @@ PROMOTION_PHRASES = (
     "earn money",
     "make money",
     "guaranteed profit",
+    "guaranteed returns",
+    "passive income",
+    "double your money",
+    "crypto giveaway",
+    "wallet verify",
+    "claim reward",
+    "free bonus",
+    "casino bonus",
+    "betting tips",
+    "vip signals",
     "点头像进简介群",
     "进简介群",
     "进主页看",
     "主页看",
+    "点击链接",
+    "点击搜索",
+    "限时免费",
+    "开户链接",
+    "注册送",
+    "稳赚不赔",
+    "投资理财",
 )
+
+ADVERTISING_RE = re.compile(
+    r"(?i)\b(?:"
+    r"advertisement|sponsored|promotion|promoted|limited\s+offer|special\s+offer|"
+    r"sale|discount|coupon|voucher|giveaway|claim\s+(?:now|reward|bonus)|"
+    r"contact\s+(?:me|us)|dm\s+(?:me|us)|message\s+(?:me|us)|subscribe|follow\s+us"
+    r")\b"
+    r"|(?:广告|推广|促销|优惠|折扣|特价|赞助|联系我|私聊|关注|订阅)"
+)
+
+GAMBLING_RE = re.compile(
+    r"(?i)\b(?:casino|gambling|betting|sportsbook|slots?|jackpot|poker|roulette|"
+    r"blackjack|lottery|wager|odds|bookmaker)\b"
+    r"|(?:博彩|赌场|娱乐城|下注|投注|开奖|棋牌|老虎机|百家乐|彩票|赔率)"
+)
+
+CRYPTO_SCAM_RE = re.compile(
+    r"(?i)\b(?:crypto|bitcoin|btc|ethereum|eth|usdt|airdrop|token|wallet|defi|"
+    r"web3|nft|staking|mining|exchange|trading\s+signal|pump|presale)\b"
+    r"|(?:空投|钱包|币圈|虚拟币|加密货币|挖矿|合约|交易所|链游)"
+)
+
+FAKE_INVESTMENT_RE = re.compile(
+    r"(?i)\b(?:investment|invest|forex|binary|roi|profit|returns?|passive\s+income|"
+    r"double\s+your\s+money|guaranteed\s+(?:profit|returns?)|risk[-\s]*free|"
+    r"financial\s+freedom|copy\s+trading)\b"
+    r"|(?:投资|理财|稳赚|收益|回报|翻倍|无风险|跟单|外汇|财务自由)"
+)
+
+ADVERTISING_TERMS = ("advertisement", "sponsored", "promotion", "discount", "giveaway", "广告", "推广", "促销", "优惠")
+GAMBLING_TERMS = ("casino", "gambling", "betting", "jackpot", "slots", "lottery", "博彩", "赌场", "下注", "投注", "开奖")
+CRYPTO_TERMS = ("crypto", "bitcoin", "ethereum", "usdt", "airdrop", "wallet", "token", "defi", "nft", "空投", "钱包", "币圈", "虚拟币")
+INVESTMENT_TERMS = ("investment", "forex", "profit", "returns", "passiveincome", "doubleyourmoney", "投资", "理财", "稳赚", "收益", "翻倍")
 
 SENSITIVE_CONTENT_RE = re.compile(
     r"(?i)\b(?:"
@@ -168,6 +262,7 @@ OBFUSCATED_SENSITIVE_RE = re.compile(
     r"(?i)(?:"
     r"\bs\W*e\W*x\b|"
     r"\bp\W*o\W*r\W*n\b|"
+    r"\bn\W*s\W*f\W*w\b|"
     r"\bn\W*u\W*d\W*e\W*s?\b|"
     r"\bx\W*x\W*x\b|"
     r"\ba\W*d\W*u\W*l\W*t\W*v\W*i\W*d\W*e\W*o\b"
@@ -225,6 +320,35 @@ def stable_text_hash(text: str) -> str:
     return hashlib.blake2b(compacted.encode("utf-8"), digest_size=12).hexdigest()
 
 
+def text_ngrams(value: str, size: int = 3) -> set[str]:
+    compacted = compact_text(value)
+    if not compacted:
+        return set()
+    if len(compacted) <= size:
+        return {compacted}
+    return {compacted[index : index + size] for index in range(len(compacted) - size + 1)}
+
+
+def text_similarity(left: str, right: str) -> float:
+    left_grams = text_ngrams(left)
+    right_grams = text_ngrams(right)
+    if not left_grams or not right_grams:
+        return 0.0
+    overlap = len(left_grams & right_grams)
+    return (2 * overlap) / (len(left_grams) + len(right_grams))
+
+
+def keyword_matches(keyword: str, normalized: str, compacted: str) -> bool:
+    normalized_keyword = normalize_text(keyword)
+    compact_keyword = compact_text(keyword)
+    is_short_ascii = normalized_keyword.isascii() and normalized_keyword.isalnum() and len(normalized_keyword) <= 4
+
+    if is_short_ascii:
+        return bool(re.search(rf"\b{re.escape(normalized_keyword)}\b", normalized))
+
+    return normalized_keyword in normalized or compact_keyword in compacted
+
+
 def has_hidden_or_entity_link(message) -> bool:
     for entity in getattr(message, "entities", None) or []:
         if isinstance(entity, (MessageEntityUrl, MessageEntityTextUrl)):
@@ -245,12 +369,35 @@ def promotion_score(text: str) -> int:
     score = 0
 
     for keyword in PROMOTION_KEYWORDS:
-        if normalize_text(keyword) in normalized or compact_text(keyword) in compacted:
+        if keyword_matches(keyword, normalized, compacted):
             score += 1
 
     for phrase in PROMOTION_PHRASES:
         if compact_text(phrase) in compacted:
             score += 2
+
+    if ADVERTISING_RE.search(normalized) or ADVERTISING_RE.search(compacted):
+        score += 3
+    elif any(compact_text(term) in compacted for term in ADVERTISING_TERMS):
+        score += 3
+
+    if GAMBLING_RE.search(normalized) or GAMBLING_RE.search(compacted):
+        score += 4
+    elif any(compact_text(term) in compacted for term in GAMBLING_TERMS):
+        score += 4
+
+    if CRYPTO_SCAM_RE.search(normalized) or CRYPTO_SCAM_RE.search(compacted):
+        score += 3
+    elif any(compact_text(term) in compacted for term in CRYPTO_TERMS):
+        score += 3
+
+    if FAKE_INVESTMENT_RE.search(normalized) or FAKE_INVESTMENT_RE.search(compacted):
+        score += 3
+    elif any(compact_text(term) in compacted for term in INVESTMENT_TERMS):
+        score += 3
+
+    if TELEGRAM_INVITE_RE.search(text or ""):
+        score += 4
 
     if has_suspicious_link(text):
         score += 2
@@ -296,6 +443,12 @@ def base_spam_decision(message) -> SpamDecision:
     if has_hidden_or_entity_link(message):
         return SpamDecision(True, "hidden-or-entity-link", True)
 
+    if TELEGRAM_INVITE_RE.search(text or ""):
+        return SpamDecision(True, "telegram-invite-link", True)
+
+    if has_suspicious_link(text):
+        return SpamDecision(True, "suspicious-url", True)
+
     if URL_RE.search(text or ""):
         return SpamDecision(True, "link", False)
 
@@ -312,6 +465,7 @@ class RateMemory:
         self.user_messages: dict[tuple[int, int], Deque[tuple[float, int]]] = defaultdict(deque)
         self.user_repeats: dict[tuple[int, int, str], Deque[float]] = defaultdict(deque)
         self.chat_repeats: dict[tuple[int, str], Deque[tuple[float, int]]] = defaultdict(deque)
+        self.chat_similar_messages: dict[int, Deque[tuple[float, int, int, str]]] = defaultdict(deque)
 
     @staticmethod
     def prune_times(values: Deque[float], cutoff: float) -> None:
@@ -355,6 +509,34 @@ class RateMemory:
         self.prune_messages(chat_repeats, now - REPEAT_WINDOW_SECONDS)
         if len(chat_repeats) >= max(REPEAT_MESSAGE_LIMIT + 1, 4):
             return SpamDecision(True, f"chat-repeat-{len(chat_repeats)}", True)
+
+        similar_messages = self.chat_similar_messages[chat_id]
+        self.prune_messages(similar_messages, now - SIMILAR_WINDOW_SECONDS)
+        while len(similar_messages) > RECENT_SIMILAR_LIMIT:
+            similar_messages.popleft()
+
+        compacted = compact_text(text)
+        should_compare_similarity = (
+            len(compacted) >= 20
+            and (
+                promotion_score(text) >= 1
+                or has_suspicious_link(text)
+                or bool(TELEGRAM_INVITE_RE.search(text or ""))
+                or len(re.findall(r"[\u4e00-\u9fff]", text)) >= 8
+            )
+        )
+
+        if should_compare_similarity:
+            similar_count = 1
+            for _, _, _, previous_text in similar_messages:
+                if text_similarity(compacted, previous_text) >= SIMILARITY_THRESHOLD:
+                    similar_count += 1
+
+            similar_messages.append((now, user_id, message_id, compacted))
+            if similar_count >= SIMILAR_MESSAGE_LIMIT:
+                return SpamDecision(True, f"similar-promo-{similar_count}", True)
+        elif compacted:
+            similar_messages.append((now, user_id, message_id, compacted))
 
         return SpamDecision(False, "clean")
 
