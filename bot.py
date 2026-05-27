@@ -18,6 +18,78 @@ URL_RE = re.compile(
     r"|\btelegram\.me/\S+\b"
 )
 
+PROMOTION_KEYWORDS = (
+    "promo",
+    "promotion",
+    "discount",
+    "limited time",
+    "free trial",
+    "free",
+    "bonus",
+    "offer",
+    "click",
+    "join",
+    "subscribe",
+    "dm",
+    "inbox",
+    "whatsapp",
+    "telegram",
+    "casino",
+    "bet",
+    "betting",
+    "airdrop",
+    "earn",
+    "profit",
+    "investment",
+    "crypto",
+    "usdt",
+    "loan",
+    "vip",
+    "点击",
+    "链接",
+    "搜索",
+    "免费",
+    "资源",
+    "限时",
+    "观看",
+    "直播",
+    "福利",
+    "加入",
+    "加群",
+    "私聊",
+    "优惠",
+    "领取",
+    "返利",
+    "佣金",
+    "赚钱",
+    "投资",
+    "博彩",
+    "赌场",
+    "下注",
+    "开奖",
+    "偷拍",
+    "成人视频",
+)
+
+STRONG_PROMOTION_RE = re.compile(
+    r"(?i)\b(?:"
+    r"limited\s*time|free\s+trial|sign\s*up|join\s+now|click\s+here|"
+    r"earn\s+money|make\s+money|guaranteed\s+profit|"
+    r"casino|betting|airdrop|crypto|usdt|whatsapp|telegram"
+    r")\b"
+    r"|(?:点击|免费|限时|领取|加群|私聊|博彩|赌场|下注|开奖|偷拍|直播)"
+)
+
+SENSITIVE_CONTENT_RE = re.compile(
+    r"(?i)\b(?:"
+    r"porn|porno|xxx|nsfw|nude|nudes|naked|sex|sexy|sexual|adult\s+video|"
+    r"hookup|escort|prostitut(?:e|ion)|onlyfans|blowjob|handjob|anal|boobs|"
+    r"pussy|dick|cock|cocaine|meth|heroin|weed|marijuana|drug|gun|weapon"
+    r")\b"
+    r"|(?:色情|成人|成人视频|裸聊|裸照|裸|性爱|做爱|约炮|黄片|无码|淫|私房|国产自拍|偷拍视频)"
+    r"|(?:សិច|អាសអាភាស|អាក្រាត|រូបអាក្រាត)"
+)
+
 CLICKABLE_ENTITY_TYPES = {
     "url",
     "text_link",
@@ -84,6 +156,45 @@ def strip_links(value: str, entities=None) -> str:
     lines = [line.strip() for line in cleaned.splitlines()]
     return "\n".join(line for line in lines if line).strip()
 
+def message_text(msg) -> str:
+    if not msg:
+        return ""
+    return "\n".join(part for part in (msg.text or "", msg.caption or "") if part)
+
+def count_promotion_keywords(text: str) -> int:
+    lowered = text.lower()
+    return sum(1 for keyword in PROMOTION_KEYWORDS if keyword.lower() in lowered)
+
+def has_repeated_promo_lines(text: str) -> bool:
+    lines = [line.strip().lower() for line in text.splitlines() if line.strip()]
+    if len(lines) < 3:
+        return False
+
+    repeated_lines = len(lines) - len(set(lines))
+    return repeated_lines >= 1 and count_promotion_keywords(text) >= 1
+
+def message_looks_promotional(msg) -> bool:
+    text = message_text(msg)
+    if not text:
+        return False
+
+    keyword_hits = count_promotion_keywords(text)
+
+    if keyword_hits >= 2:
+        return True
+
+    if STRONG_PROMOTION_RE.search(text):
+        return True
+
+    if has_repeated_promo_lines(text):
+        return True
+
+    return False
+
+def message_has_sensitive_content(msg) -> bool:
+    text = message_text(msg)
+    return bool(text and SENSITIVE_CONTENT_RE.search(text))
+
 def message_has_link(msg) -> bool:
     if not msg:
         return False
@@ -111,6 +222,13 @@ def message_has_link(msg) -> bool:
 
     return False
 
+def message_should_be_filtered(msg) -> bool:
+    return (
+        message_has_link(msg)
+        or message_looks_promotional(msg)
+        or message_has_sensitive_content(msg)
+    )
+
 async def is_admin_message(msg, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if msg.chat.type == "channel":
         return True
@@ -133,11 +251,11 @@ async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if not msg:
         return
 
-    if not message_has_link(msg):
+    if not message_should_be_filtered(msg):
         return
 
     if await is_admin_message(msg, context):
-        logging.info("Allowed admin link/forward message in chat %s", msg.chat_id)
+        logging.info("Allowed admin filtered-type message in chat %s", msg.chat_id)
         return
 
     if msg.chat.type == "channel":
@@ -149,7 +267,7 @@ async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             chat_id=msg.chat_id,
             message_id=msg.message_id,
         )
-        logging.info("Deleted link/forward message in chat %s", msg.chat_id)
+        logging.info("Deleted link/forward/promo/sensitive message in chat %s", msg.chat_id)
     except Exception as e:
         logging.exception("Failed to delete message: %s", e)
 
