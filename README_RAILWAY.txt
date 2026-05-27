@@ -1,44 +1,45 @@
 RAILWAY HOSTING STEPS
 
-1. Create your bot with @BotFather in Telegram.
-   - Send: /newbot
-   - Save the BOT TOKEN.
+1. Create your Telegram bot with BotFather and copy BOT_TOKEN.
 
-2. Add your bot to your Telegram channel as Admin.
-   Turn ON:
-   - Post Messages
+2. Get API_ID and API_HASH:
+   - Go to https://my.telegram.org
+   - Open API development tools
+   - Create an app
+   - Copy API_ID and API_HASH
+
+3. Add the bot to your Telegram group as admin.
+   Enable:
    - Delete Messages
+   - Ban Users / Restrict Members
 
-3. Make a new GitHub repository.
-
-4. Upload these files to the main folder of the repo:
+4. Upload this folder to GitHub:
    - bot.py
    - requirements.txt
-   - README.txt
    - railway.json
+   - README.txt
    - README_RAILWAY.txt
 
-5. Go to Railway and sign in.
+5. In Railway, create a new project from your GitHub repo.
 
-6. Click New Project.
-
-7. Choose Deploy from GitHub Repo.
-
-8. Select your repository.
-
-9. In Railway, open your service Variables tab.
-   Add:
+6. In Railway Variables, add:
+   - API_ID = your Telegram API ID
+   - API_HASH = your Telegram API hash
    - BOT_TOKEN = your BotFather token
 
-10. Railway should read railway.json automatically.
-    If it asks for a start command, use:
-    python bot.py
+7. Optional Railway Variables:
+   - WHITELIST_IDS = comma-separated Telegram user IDs
+   - WHITELIST_USERNAMES = comma-separated usernames without @
+   - BOT_SPAM_ACTION = ban
+   - USER_SPAM_ACTION = mute
+   - FLOOD_MESSAGE_LIMIT = 8
+   - REPEAT_MESSAGE_LIMIT = 3
+   - LOG_LEVEL = INFO
 
-11. Deploy.
-
-12. Test by forwarding a post into your channel.
-    The bot should delete the forwarded post and repost it without the source link.
+8. Start command:
+   python bot.py
 
 IMPORTANT
-- Do not generate a domain. This bot is not a website.
-- Keep BOT_TOKEN only in Railway Variables, not inside bot.py.
+- Do not generate a domain. This is a worker bot, not a website.
+- Keep BOT_TOKEN and API_HASH private.
+- If spam still appears, confirm the bot has Delete Messages and Ban Users permission.

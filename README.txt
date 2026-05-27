@@ -1,58 +1,87 @@
-TELEGRAM FORWARD LINK CLEANER BOT
+TELEGRAM ANTI-SPAM BOT
 
-What this bot does:
-- watches your Telegram channel
-- if someone forwards a post into your channel, the bot removes the forwarded version
-- reposts it as a clean post without the forwarded-source link
-- removes normal links from the text/caption too
+This bot uses Telethon to protect large Telegram groups from spam bots.
 
-Important:
-- This only works if the bot is an ADMIN in your channel.
-- Give the bot permission to Post Messages and Delete Messages.
-- It cannot remove links that are drawn inside an image itself.
+What it does:
+- deletes spam messages quickly with async batch deletion
+- detects fast flood spam
+- deletes repeated messages
+- detects hidden links, suspicious links, Chinese spam text, and promotional text
+- detects sexual, adult, and abuse-related text in English, Chinese, and Khmer
+- deletes forwarded messages from channels and bots
+- bans spam bots automatically by default
+- mutes non-admin spam users by default
+- ignores group admins and whitelisted users
+- logs deleted spam to anti_spam.log and the terminal
+- catches Telegram FloodWait errors and waits safely
 
-STEP 1 — Create the bot
-1. Open Telegram
-2. Search for BotFather
-3. Send /newbot
-4. Choose a bot name
-5. Choose a bot username
-6. Copy the token BotFather gives you
+IMPORTANT TELEGRAM PERMISSIONS
+Add the bot as an admin in every protected group and enable:
+- Delete Messages
+- Ban Users / Restrict Members
 
-STEP 2 — Add bot to your channel
-1. Open your Telegram channel
-2. Go to Administrators
-3. Add your bot
-4. Enable:
-   - Post Messages
-   - Delete Messages
+The bot cannot delete messages unless it is an admin.
+The bot cannot ban or mute users unless it has restrict/ban permission.
 
-STEP 3 — Run the bot
-Option A: ask a freelancer/friend to deploy this folder
-- Send them this whole folder or zip file
-- Tell them: “Please deploy this Python Telegram bot and set BOT_TOKEN as an environment variable.”
+STEP 1 - Create a bot token
+1. Open Telegram.
+2. Search for BotFather.
+3. Send /newbot.
+4. Copy the BOT_TOKEN.
 
-Option B: run it on your own computer
-1. Install Python 3
-2. Open Terminal in this folder
-3. Run:
-   pip install -r requirements.txt
-4. Set your token:
-   Mac/Linux:
-   export BOT_TOKEN="YOUR_BOT_TOKEN"
+STEP 2 - Get API_ID and API_HASH
+1. Open https://my.telegram.org
+2. Log in with your Telegram account.
+3. Open API development tools.
+4. Create an app.
+5. Copy API_ID and API_HASH.
 
-   Windows PowerShell:
-   setx BOT_TOKEN "YOUR_BOT_TOKEN"
-5. Start it:
-   python bot.py
+STEP 3 - Install dependencies
+Open Terminal in this folder:
 
-How to test:
-- Forward a message into your channel
-- The bot should delete the forwarded post
-- Then repost the same content without the source link
+cd /Users/sokmean/Desktop/telegram-link-cleaner-bot-main
+python3 -m pip install -r requirements.txt
 
-If it does not work:
-- check the bot is admin
-- check Post Messages and Delete Messages are enabled
-- check the token is correct
-- make sure the bot is running
+STEP 4 - Set environment variables
+Mac/Linux:
+
+export API_ID="123456"
+export API_HASH="your_api_hash"
+export BOT_TOKEN="your_bot_token"
+
+Optional settings:
+
+export WHITELIST_IDS="123456789,987654321"
+export WHITELIST_USERNAMES="trusteduser,anothertrusteduser"
+export BOT_SPAM_ACTION="ban"
+export USER_SPAM_ACTION="mute"
+export FLOOD_WINDOW_SECONDS="10"
+export FLOOD_MESSAGE_LIMIT="8"
+export REPEAT_WINDOW_SECONDS="120"
+export REPEAT_MESSAGE_LIMIT="3"
+export MUTE_SECONDS="86400"
+export LOG_LEVEL="INFO"
+
+STEP 5 - Start the bot
+
+python3 bot.py
+
+DEPLOYMENT NOTES
+- For Railway, set API_ID, API_HASH, and BOT_TOKEN in Variables.
+- Start command: python bot.py
+- Do not create a web domain. This is a worker bot, not a website.
+- Keep BOT_TOKEN and API_HASH private.
+
+TUNING FOR LARGE GROUPS
+- Lower FLOOD_MESSAGE_LIMIT to catch floods faster.
+- Raise DELETE_WORKERS if your group receives very heavy spam.
+- Keep DELETE_BATCH_SIZE at 100 or lower.
+- If Telegram sends FloodWait, the bot will wait and continue automatically.
+
+DEFAULT ACTIONS
+- Bots that send spam: banned.
+- Normal users that send spam: muted.
+- Admins and whitelist users: ignored.
+
+Logs are written to:
+anti_spam.log
