@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+import unicodedata
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
@@ -80,6 +81,20 @@ STRONG_PROMOTION_RE = re.compile(
     r"|(?:点击|免费|限时|领取|加群|私聊|博彩|赌场|下注|开奖|偷拍|直播)"
 )
 
+PROMOTION_COMPACT_PHRASES = (
+    "limited time",
+    "free trial",
+    "sign up",
+    "join now",
+    "click here",
+    "buy now",
+    "contact me",
+    "message me",
+    "earn money",
+    "make money",
+    "guaranteed profit",
+)
+
 SENSITIVE_CONTENT_RE = re.compile(
     r"(?i)\b(?:"
     r"porn|porno|xxx|nsfw|nude|nudes|naked|sex|sexy|sexual|adult\s+video|"
@@ -93,6 +108,41 @@ SENSITIVE_CONTENT_RE = re.compile(
     r"|(?:来个弟弟|來個弟弟|陪姐姐聊聊天|有喜欢的|有喜歡的)"
     r"|(?:សិច|អាសអាភាស|អាក្រាត|រូបអាក្រាត)"
 )
+
+OBFUSCATED_SENSITIVE_RE = re.compile(
+    r"(?i)(?:"
+    r"\bs\W*e\W*x\b|"
+    r"\bp\W*o\W*r\W*n\b|"
+    r"\bn\W*u\W*d\W*e\W*s?\b|"
+    r"\bx\W*x\W*x\b|"
+    r"\ba\W*d\W*u\W*l\W*t\W*v\W*i\W*d\W*e\W*o\b"
+    r")"
+)
+
+SENSITIVE_COMPACT_PHRASES = (
+    "child porn",
+    "child abuse",
+    "child sexual",
+    "sexual content",
+    "adult video",
+    "underage sex",
+    "minor sex",
+    "teen sex",
+    "点头像进简介群",
+    "进简介群",
+    "看幼女",
+    "初中生破处",
+    "分享12岁",
+    "邻居小女孩",
+    "手机相册私密照",
+    "有喜欢的进主页看",
+    "进主页看",
+    "主页看",
+    "来个弟弟",
+    "陪姐姐聊聊天",
+)
+
+ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\ufeff\u2060]")
 
 CLICKABLE_ENTITY_TYPES = {
     "url",
@@ -160,17 +210,31 @@ def strip_links(value: str, entities=None) -> str:
     lines = [line.strip() for line in cleaned.splitlines()]
     return "\n".join(line for line in lines if line).strip()
 
+def normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "")
+    normalized = ZERO_WIDTH_RE.sub("", normalized)
+    return normalized.lower()
+
+def compact_text(value: str) -> str:
+    return "".join(char for char in normalize_text(value) if char.isalnum())
+
 def message_text(msg) -> str:
     if not msg:
         return ""
     return "\n".join(part for part in (msg.text or "", msg.caption or "") if part)
 
 def count_promotion_keywords(text: str) -> int:
-    lowered = text.lower()
-    return sum(1 for keyword in PROMOTION_KEYWORDS if keyword.lower() in lowered)
+    normalized = normalize_text(text)
+    compacted = compact_text(text)
+
+    return sum(
+        1
+        for keyword in PROMOTION_KEYWORDS
+        if normalize_text(keyword) in normalized or compact_text(keyword) in compacted
+    )
 
 def has_repeated_promo_lines(text: str) -> bool:
-    lines = [line.strip().lower() for line in text.splitlines() if line.strip()]
+    lines = [compact_text(line) for line in text.splitlines() if compact_text(line)]
     if len(lines) < 3:
         return False
 
@@ -182,12 +246,17 @@ def message_looks_promotional(msg) -> bool:
     if not text:
         return False
 
+    normalized = normalize_text(text)
+    compacted = compact_text(text)
     keyword_hits = count_promotion_keywords(text)
 
     if keyword_hits >= 2:
         return True
 
-    if STRONG_PROMOTION_RE.search(text):
+    if STRONG_PROMOTION_RE.search(normalized) or STRONG_PROMOTION_RE.search(compacted):
+        return True
+
+    if any(compact_text(phrase) in compacted for phrase in PROMOTION_COMPACT_PHRASES):
         return True
 
     if has_repeated_promo_lines(text):
@@ -197,7 +266,28 @@ def message_looks_promotional(msg) -> bool:
 
 def message_has_sensitive_content(msg) -> bool:
     text = message_text(msg)
-    return bool(text and SENSITIVE_CONTENT_RE.search(text))
+    if not text:
+        return False
+
+    normalized = normalize_text(text)
+    compacted = compact_text(text)
+
+    if SENSITIVE_CONTENT_RE.search(normalized) or SENSITIVE_CONTENT_RE.search(compacted):
+        return True
+
+    if OBFUSCATED_SENSITIVE_RE.search(normalized):
+        return True
+
+    return any(compact_text(phrase) in compacted for phrase in SENSITIVE_COMPACT_PHRASES)
+
+def message_is_forwarded(msg) -> bool:
+    return bool(
+        getattr(msg, "forward_origin", None)
+        or getattr(msg, "forward_from", None)
+        or getattr(msg, "forward_from_chat", None)
+        or getattr(msg, "forward_sender_name", None)
+        or getattr(msg, "forward_date", None)
+    )
 
 def message_has_link(msg) -> bool:
     if not msg:
@@ -221,7 +311,7 @@ def message_has_link(msg) -> bool:
     if caption and URL_RE.search(caption):
         return True
 
-    if msg.forward_origin:
+    if message_is_forwarded(msg):
         return True
 
     return False
@@ -258,6 +348,17 @@ async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message_should_be_filtered(msg):
         return
 
+    if message_is_forwarded(msg):
+        try:
+            await context.bot.delete_message(
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+            )
+            logging.info("Deleted forwarded message in chat %s", msg.chat_id)
+        except Exception as e:
+            logging.exception("Failed to delete forwarded message: %s", e)
+        return
+
     if message_has_sensitive_content(msg):
         try:
             await context.bot.delete_message(
@@ -267,6 +368,17 @@ async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             logging.info("Deleted sensitive message in chat %s", msg.chat_id)
         except Exception as e:
             logging.exception("Failed to delete sensitive message: %s", e)
+        return
+
+    if message_looks_promotional(msg):
+        try:
+            await context.bot.delete_message(
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+            )
+            logging.info("Deleted promotional message in chat %s", msg.chat_id)
+        except Exception as e:
+            logging.exception("Failed to delete promotional message: %s", e)
         return
 
     if await is_admin_message(msg, context):
