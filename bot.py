@@ -27,6 +27,15 @@ CLICKABLE_ENTITY_TYPES = {
     "phone_number",
 }
 
+REMOVABLE_ENTITY_TYPES = {
+    "url",
+    "text_link",
+    "mention",
+    "text_mention",
+    "email",
+    "phone_number",
+}
+
 def has_clickable_entities(entities) -> bool:
     if not entities:
         return False
@@ -34,6 +43,46 @@ def has_clickable_entities(entities) -> bool:
         if entity.type in CLICKABLE_ENTITY_TYPES:
             return True
     return False
+
+def has_link_buttons(reply_markup) -> bool:
+    inline_keyboard = getattr(reply_markup, "inline_keyboard", None)
+    if not inline_keyboard:
+        return False
+
+    for row in inline_keyboard:
+        for button in row:
+            if (
+                getattr(button, "url", None)
+                or getattr(button, "login_url", None)
+                or getattr(button, "web_app", None)
+            ):
+                return True
+    return False
+
+def utf16_to_py_index(text: str, offset: int) -> int:
+    encoded = text.encode("utf-16-le")
+    return len(encoded[: offset * 2].decode("utf-16-le"))
+
+def strip_links(value: str, entities=None) -> str:
+    if not value:
+        return ""
+
+    cleaned = value
+    ranges = []
+    for entity in entities or []:
+        if entity.type in REMOVABLE_ENTITY_TYPES:
+            start = utf16_to_py_index(value, entity.offset)
+            end = utf16_to_py_index(value, entity.offset + entity.length)
+            ranges.append((start, end))
+
+    for start, end in sorted(ranges, reverse=True):
+        cleaned = cleaned[:start] + cleaned[end:]
+
+    cleaned = URL_RE.sub("", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+
+    lines = [line.strip() for line in cleaned.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
 
 def message_has_link(msg) -> bool:
     if not msg:
@@ -48,6 +97,9 @@ def message_has_link(msg) -> bool:
     if has_clickable_entities(msg.caption_entities):
         return True
 
+    if has_link_buttons(msg.reply_markup):
+        return True
+
     if text and URL_RE.search(text):
         return True
 
@@ -59,12 +111,13 @@ def message_has_link(msg) -> bool:
 
     return False
 
-async def is_admin_or_channel_message(msg, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    # Messages sent as channel / anonymous admin
-    if msg.sender_chat is not None:
+async def is_admin_message(msg, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if msg.chat.type == "channel":
         return True
 
-    # Normal user message: check admin status in this group
+    if msg.sender_chat is not None:
+        return msg.sender_chat.id == msg.chat_id
+
     if msg.from_user is None:
         return False
 
@@ -80,15 +133,15 @@ async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if not msg:
         return
 
-    if msg.from_user and msg.from_user.is_bot:
-        return
-
     if not message_has_link(msg):
         return
 
-    # Keep admin/channel messages
-    if await is_admin_or_channel_message(msg, context):
-        logging.info("Allowed admin/channel message in chat %s", msg.chat_id)
+    if await is_admin_message(msg, context):
+        logging.info("Allowed admin link/forward message in chat %s", msg.chat_id)
+        return
+
+    if msg.chat.type == "channel":
+        await clean_channel_post(msg, context)
         return
 
     try:
@@ -96,9 +149,34 @@ async def delete_link_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             chat_id=msg.chat_id,
             message_id=msg.message_id,
         )
-        logging.info("Deleted user link message in chat %s", msg.chat_id)
+        logging.info("Deleted link/forward message in chat %s", msg.chat_id)
     except Exception as e:
         logging.exception("Failed to delete message: %s", e)
+
+async def clean_channel_post(msg, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = strip_links(msg.text or "", msg.entities)
+    caption = strip_links(msg.caption or "", msg.caption_entities)
+
+    try:
+        if msg.text is not None:
+            if text:
+                await context.bot.send_message(chat_id=msg.chat_id, text=text)
+        else:
+            await context.bot.copy_message(
+                chat_id=msg.chat_id,
+                from_chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                caption=caption if msg.caption is not None else None,
+                caption_entities=[],
+            )
+
+        await context.bot.delete_message(
+            chat_id=msg.chat_id,
+            message_id=msg.message_id,
+        )
+        logging.info("Cleaned channel post in chat %s", msg.chat_id)
+    except Exception as e:
+        logging.exception("Failed to clean channel post: %s", e)
 
 def main():
     if not BOT_TOKEN:
