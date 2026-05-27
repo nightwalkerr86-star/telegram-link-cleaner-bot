@@ -116,7 +116,7 @@ async def is_admin_message(msg, context: ContextTypes.DEFAULT_TYPE) -> bool:
         return True
 
     if msg.sender_chat is not None:
-        return msg.sender_chat.id == msg.chat_id
+        return True
 
     if msg.from_user is None:
         return False
