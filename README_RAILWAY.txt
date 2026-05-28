@@ -29,6 +29,7 @@ RAILWAY HOSTING STEPS
 
 7. Optional Railway Variables:
    - WHITELIST_IDS = comma-separated Telegram user IDs
+   - ADMIN_IDS = comma-separated admin Telegram user IDs
    - WHITELIST_USERNAMES = comma-separated usernames without @
    - BOT_SPAM_ACTION = ban
    - USER_SPAM_ACTION = mute

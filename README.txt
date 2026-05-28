@@ -53,6 +53,7 @@ export BOT_TOKEN="your_bot_token"
 Optional settings:
 
 export WHITELIST_IDS="123456789,987654321"
+export ADMIN_IDS="123456789,987654321"
 export WHITELIST_USERNAMES="trusteduser,anothertrusteduser"
 export BOT_SPAM_ACTION="ban"
 export USER_SPAM_ACTION="mute"
@@ -88,7 +89,7 @@ TUNING FOR LARGE GROUPS
 DEFAULT ACTIONS
 - Bots that send spam: banned.
 - Normal users that send spam: muted.
-- Admins and whitelist users: ignored.
+- Admins, channel posts, anonymous admin posts, channel identity posts, and whitelist users: always ignored before filtering.
 
 Logs are written to:
 anti_spam.log

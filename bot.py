@@ -65,7 +65,7 @@ ALLOW_CHANNEL_IDENTITY_COMMENTS = env_bool("ALLOW_CHANNEL_IDENTITY_COMMENTS", Tr
 
 WHITELIST_IDS = {
     int(value.strip())
-    for value in os.getenv("WHITELIST_IDS", "").split(",")
+    for value in (os.getenv("WHITELIST_IDS", "") + "," + os.getenv("ADMIN_IDS", "")).split(",")
     if value.strip().lstrip("-").isdigit()
 }
 WHITELIST_USERNAMES = {
@@ -448,16 +448,56 @@ def is_channel_post(message) -> bool:
     return ALLOW_CHANNEL_POSTS and bool(getattr(message, "post", False))
 
 
+def message_peer_id(message, attr: str) -> int | None:
+    peer = getattr(message, attr, None)
+    if peer is None:
+        return None
+
+    for field in ("user_id", "channel_id", "chat_id"):
+        value = getattr(peer, field, None)
+        if value is not None:
+            return value
+
+    return normalized_peer_id(peer)
+
+
+def message_sender_id(message) -> int | None:
+    direct_sender_id = getattr(message, "sender_id", None)
+    if direct_sender_id is not None:
+        return normalized_peer_id(direct_sender_id)
+    return normalized_peer_id(message_peer_id(message, "from_id"))
+
+
 def is_anonymous_admin_comment(chat_id: int, sender) -> bool:
     if not ALLOW_ANONYMOUS_ADMIN_COMMENTS or sender is None:
         return False
     return normalized_peer_id(getattr(sender, "id", None)) == normalized_peer_id(chat_id)
 
 
+def is_anonymous_admin_message(chat_id: int, message) -> bool:
+    if not ALLOW_ANONYMOUS_ADMIN_COMMENTS or message is None:
+        return False
+
+    chat_peer_id = normalized_peer_id(chat_id)
+    return (
+        normalized_peer_id(message_sender_id(message)) == chat_peer_id
+        or normalized_peer_id(message_peer_id(message, "from_id")) == chat_peer_id
+        or bool(getattr(message, "post_author", None))
+    )
+
+
 def is_channel_identity_comment(sender) -> bool:
     if not ALLOW_CHANNEL_IDENTITY_COMMENTS or sender is None:
         return False
     return bool(getattr(sender, "broadcast", False))
+
+
+def is_channel_identity_message(message) -> bool:
+    if not ALLOW_CHANNEL_IDENTITY_COMMENTS or message is None:
+        return False
+
+    from_id = getattr(message, "from_id", None)
+    return from_id is not None and hasattr(from_id, "channel_id")
 
 
 def base_spam_decision(message) -> SpamDecision:
@@ -561,20 +601,23 @@ class AdminCache:
         self.client = client
         self.cache: dict[tuple[int, int], tuple[float, bool]] = {}
 
-    async def is_admin_or_whitelisted(self, chat_id: int, sender, message=None) -> bool:
+    async def is_admin_or_whitelisted(self, chat_id: int, sender, message=None, chat=None) -> bool:
         if message is not None and is_channel_post(message):
+            logger.debug("allow channel post chat=%s msg=%s", chat_id, getattr(message, "id", None))
             return True
 
-        if is_anonymous_admin_comment(chat_id, sender):
+        if is_anonymous_admin_comment(chat_id, sender) or is_anonymous_admin_message(chat_id, message):
+            logger.debug("allow anonymous admin chat=%s msg=%s", chat_id, getattr(message, "id", None))
             return True
 
-        if is_channel_identity_comment(sender):
+        if is_channel_identity_comment(sender) or is_channel_identity_message(message):
+            logger.debug("allow channel identity chat=%s msg=%s", chat_id, getattr(message, "id", None))
             return True
 
-        if sender is None:
-            return False
+        user_id = getattr(sender, "id", None) if sender is not None else None
+        if user_id is None and message is not None:
+            user_id = message_sender_id(message)
 
-        user_id = getattr(sender, "id", None)
         username = (getattr(sender, "username", "") or "").lower()
 
         if user_id in WHITELIST_IDS or username in WHITELIST_USERNAMES:
@@ -582,15 +625,19 @@ class AdminCache:
         if user_id is None:
             return False
 
-        key = (chat_id, user_id)
+        key = (normalized_peer_id(chat_id) or chat_id, normalized_peer_id(user_id) or user_id)
         now = time.monotonic()
         cached = self.cache.get(key)
         if cached and cached[0] > now:
             return cached[1]
 
         try:
-            permissions = await self.client.get_permissions(chat_id, user_id)
-            is_admin = bool(getattr(permissions, "is_admin", False))
+            permissions = await self.client.get_permissions(chat or chat_id, sender or user_id)
+            is_admin = bool(
+                getattr(permissions, "is_admin", False)
+                or getattr(permissions, "is_creator", False)
+                or getattr(permissions, "post_messages", False)
+            )
         except (ChatAdminRequiredError, UserAdminInvalidError):
             is_admin = False
         except FloodWaitError as exc:
@@ -600,7 +647,8 @@ class AdminCache:
             logger.warning("admin check failed chat=%s user=%s error=%s", chat_id, user_id, exc)
             is_admin = False
 
-        self.cache[key] = (now + ADMIN_CACHE_TTL, is_admin)
+        cache_ttl = ADMIN_CACHE_TTL if is_admin else min(ADMIN_CACHE_TTL, 30)
+        self.cache[key] = (now + cache_ttl, is_admin)
         return is_admin
 
 
@@ -732,11 +780,23 @@ async def main() -> None:
     async def on_new_message(event):
         message = event.message
         chat_id = event.chat_id
-        sender = await event.get_sender()
-        user_id = getattr(sender, "id", 0) or 0
 
-        if await admin_cache.is_admin_or_whitelisted(chat_id, sender, message):
+        if ALLOW_CHANNEL_POSTS and getattr(event, "is_channel", False) and not getattr(event, "is_group", False):
             return
+
+        sender = await event.get_sender()
+        chat = getattr(event, "chat", None)
+        if chat is None:
+            try:
+                chat = await event.get_chat()
+            except Exception as exc:
+                logger.warning("failed to load chat entity chat=%s msg=%s error=%s", chat_id, message.id, exc)
+
+        if await admin_cache.is_admin_or_whitelisted(chat_id, sender, message, chat):
+            logger.debug("allowed admin/whitelist message chat=%s msg=%s", chat_id, message.id)
+            return
+
+        user_id = getattr(sender, "id", None) or message_sender_id(message) or 0
 
         text = message_text(message)
         decision = base_spam_decision(message)
@@ -751,6 +811,16 @@ async def main() -> None:
         if getattr(sender, "bot", False) and not decision.punish:
             decision = SpamDecision(True, decision.reason, True)
 
+        logger.info(
+            "queue delete chat=%s msg=%s sender=%s message_sender=%s from_id=%s post=%s reason=%s",
+            chat_id,
+            message.id,
+            getattr(sender, "id", None),
+            message_sender_id(message),
+            getattr(message, "from_id", None),
+            getattr(message, "post", None),
+            decision.reason,
+        )
         await delete_queue.put(chat_id, message.id, decision.reason)
 
         if decision.reason.startswith("flood"):
