@@ -60,6 +60,9 @@ export USER_SPAM_ACTION="mute"
 export ALLOW_CHANNEL_POSTS="true"
 export ALLOW_ANONYMOUS_ADMIN_COMMENTS="true"
 export ALLOW_CHANNEL_IDENTITY_COMMENTS="true"
+export ALLOW_LINKED_CHANNEL_FORWARDS="true"
+export ALLOW_CHANNEL_MEDIA_WITH_LINKS="true"
+export TRUSTED_CHANNEL_IDS="-1001234567890"
 export FLOOD_WINDOW_SECONDS="10"
 export FLOOD_MESSAGE_LIMIT="8"
 export SIMILAR_WINDOW_SECONDS="300"
@@ -89,7 +92,7 @@ TUNING FOR LARGE GROUPS
 DEFAULT ACTIONS
 - Bots that send spam: banned.
 - Normal users that send spam: muted.
-- Admins, channel posts, anonymous admin posts, channel identity posts, and whitelist users: always ignored before filtering.
+- Admins, channel posts, linked-channel discussion posts, anonymous admin posts, channel identity posts, and whitelist users: always ignored before filtering.
 
 Logs are written to:
 anti_spam.log

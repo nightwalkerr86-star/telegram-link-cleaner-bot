@@ -63,6 +63,7 @@ ALLOW_CHANNEL_POSTS = env_bool("ALLOW_CHANNEL_POSTS", True)
 ALLOW_ANONYMOUS_ADMIN_COMMENTS = env_bool("ALLOW_ANONYMOUS_ADMIN_COMMENTS", True)
 ALLOW_CHANNEL_IDENTITY_COMMENTS = env_bool("ALLOW_CHANNEL_IDENTITY_COMMENTS", True)
 ALLOW_LINKED_CHANNEL_FORWARDS = env_bool("ALLOW_LINKED_CHANNEL_FORWARDS", True)
+ALLOW_CHANNEL_MEDIA_WITH_LINKS = env_bool("ALLOW_CHANNEL_MEDIA_WITH_LINKS", True)
 
 WHITELIST_IDS = {
     int(value.strip())
@@ -548,6 +549,33 @@ def is_channel_identity_message(message) -> bool:
     return from_id is not None and hasattr(from_id, "channel_id")
 
 
+def message_has_media(message) -> bool:
+    return bool(
+        getattr(message, "media", None)
+        or getattr(message, "video", None)
+        or getattr(message, "document", None)
+        or getattr(message, "photo", None)
+    )
+
+
+def is_channel_origin_message(message, sender=None) -> bool:
+    return bool(
+        is_channel_post(message)
+        or is_channel_identity_message(message)
+        or is_channel_identity_comment(sender)
+        or is_linked_channel_forward(message)
+        or getattr(message, "post_author", None)
+    )
+
+
+def is_allowed_channel_media_post(message, sender=None) -> bool:
+    return (
+        ALLOW_CHANNEL_MEDIA_WITH_LINKS
+        and message_has_media(message)
+        and is_channel_origin_message(message, sender)
+    )
+
+
 def base_spam_decision(message) -> SpamDecision:
     text = message_text(message)
 
@@ -650,6 +678,10 @@ class AdminCache:
         self.cache: dict[tuple[int, int], tuple[float, bool]] = {}
 
     async def is_admin_or_whitelisted(self, chat_id: int, sender, message=None, chat=None) -> bool:
+        if message is not None and is_allowed_channel_media_post(message, sender):
+            logger.debug("allow channel media post chat=%s msg=%s", chat_id, getattr(message, "id", None))
+            return True
+
         if message is not None and is_channel_post(message):
             logger.debug("allow channel post chat=%s msg=%s", chat_id, getattr(message, "id", None))
             return True
@@ -860,13 +892,14 @@ async def main() -> None:
             decision = SpamDecision(True, decision.reason, True)
 
         logger.info(
-            "queue delete chat=%s msg=%s sender=%s message_sender=%s from_id=%s post=%s reason=%s",
+            "queue delete chat=%s msg=%s sender=%s message_sender=%s from_id=%s post=%s fwd_channel=%s reason=%s",
             chat_id,
             message.id,
             getattr(sender, "id", None),
             message_sender_id(message),
             getattr(message, "from_id", None),
             getattr(message, "post", None),
+            forward_header_channel_id(message),
             decision.reason,
         )
         await delete_queue.put(chat_id, message.id, decision.reason)
