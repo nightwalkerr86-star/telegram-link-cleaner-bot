@@ -366,6 +366,18 @@ def keyword_matches(keyword: str, normalized: str, compacted: str) -> bool:
     return normalized_keyword in normalized or compact_keyword in compacted
 
 
+def is_admin_status(status) -> tuple[bool, bool]:
+    status_value = getattr(status, "value", status)
+    status_text = str(status_value or "").lower()
+    is_creator = status_text in {"creator", "owner"} or status_text.endswith(".creator") or status_text.endswith(".owner")
+    is_admin = (
+        status_text in {"administrator", "admin"}
+        or status_text.endswith(".administrator")
+        or status_text.endswith(".admin")
+    )
+    return is_creator, is_admin
+
+
 def has_hidden_or_entity_link(message) -> bool:
     for entity_attr in ("entities", "caption_entities"):
         for entity in getattr(message, entity_attr, None) or []:
@@ -799,8 +811,28 @@ class AdminCache:
         self.client = client
         self.cache: dict[tuple[int, int], tuple[float, bool, bool, bool]] = {}
 
+    async def fetch_admin_status(self, chat_id: int, user_id: int, sender, chat=None) -> tuple[bool, bool, bool]:
+        if hasattr(self.client, "get_chat_member"):
+            member = await self.client.get_chat_member(chat_id, user_id)
+            is_creator, is_admin = is_admin_status(getattr(member, "status", None))
+            return is_creator, is_admin, False
+
+        permissions = await self.client.get_permissions(chat or chat_id, sender or user_id)
+        return (
+            bool(getattr(permissions, "is_creator", False)),
+            bool(getattr(permissions, "is_admin", False)),
+            bool(getattr(permissions, "post_messages", False)),
+        )
+
     async def is_admin_or_whitelisted(self, chat_id: int, sender, message=None, chat=None) -> bool:
-        user_id = message_from_user_id(message, sender) if message is not None else entity_id(sender)
+        if message is not None and getattr(message, "sender_chat", None):
+            log_allowed_admin_post(chat_id, sender, message, "sender-chat")
+            return True
+
+        from_user = getattr(message, "from_user", None) if message is not None else None
+        user_id = entity_id(from_user) if from_user is not None else None
+        if user_id is None:
+            user_id = message_from_user_id(message, sender) if message is not None else entity_id(sender)
 
         if user_id is not None:
             key = (normalized_peer_id(chat_id) or chat_id, normalized_peer_id(user_id) or user_id)
@@ -810,10 +842,7 @@ class AdminCache:
                 is_creator, is_admin, can_post = cached[1], cached[2], cached[3]
             else:
                 try:
-                    permissions = await self.client.get_permissions(chat or chat_id, sender or user_id)
-                    is_creator = bool(getattr(permissions, "is_creator", False))
-                    is_admin = bool(getattr(permissions, "is_admin", False))
-                    can_post = bool(getattr(permissions, "post_messages", False))
+                    is_creator, is_admin, can_post = await self.fetch_admin_status(chat_id, user_id, sender, chat)
                 except (ChatAdminRequiredError, UserAdminInvalidError):
                     is_creator = False
                     is_admin = False
