@@ -79,7 +79,7 @@ links, embedded links, button links, URL links, and promotional text without
 deletion. Admin status is cached for ADMIN_CACHE_TTL seconds, then refreshed.
 ADMIN_WHITELIST_IDS is optional and can be used as a manual emergency bypass
 list if Telegram cannot resolve an admin identity. ADMIN_IDS still works as an
-old alias.
+old alias. TRUSTED_CHANNEL_IDS accepts normal channel IDs and -100 channel IDs.
 
 STEP 5 - Start the bot
 

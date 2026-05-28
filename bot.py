@@ -43,7 +43,13 @@ def env_id_set(*names: str) -> set[int]:
         for value in os.getenv(name, "").split(","):
             value = value.strip()
             if value.lstrip("-").isdigit():
-                values.add(int(value))
+                raw_value = int(value)
+                values.add(raw_value)
+                try:
+                    normalized_value, _ = utils.resolve_id(raw_value)
+                    values.add(normalized_value)
+                except Exception:
+                    values.add(abs(raw_value))
     return values
 
 

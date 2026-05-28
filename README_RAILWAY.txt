@@ -39,7 +39,7 @@ RAILWAY HOSTING STEPS
    - ALLOW_CHANNEL_IDENTITY_COMMENTS = true
    - ALLOW_LINKED_CHANNEL_FORWARDS = true
    - ALLOW_CHANNEL_MEDIA_WITH_LINKS = true
-   - TRUSTED_CHANNEL_IDS = comma-separated channel IDs, optional
+   - TRUSTED_CHANNEL_IDS = comma-separated channel IDs, optional, accepts -100 IDs
    - ADMIN_CACHE_TTL = 300
    - FLOOD_MESSAGE_LIMIT = 8
    - SIMILAR_MESSAGE_LIMIT = 3
