@@ -799,13 +799,9 @@ class AdminCache:
             log_allowed_admin_post(chat_id, sender, message, "owner")
             return True
 
-        if (is_admin or can_post) and not id_in_set(user_id, ADMIN_WHITELIST_IDS):
-            logger.debug(
-                "admin not in ADMIN_WHITELIST_IDS will be filtered chat=%s msg=%s sender=%s",
-                chat_id,
-                getattr(message, "id", None),
-                user_id,
-            )
+        if is_admin or can_post:
+            log_allowed_admin_post(chat_id, sender, message, "telegram-admin")
+            return True
 
         return False
 
