@@ -37,6 +37,16 @@ def env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def env_id_set(*names: str) -> set[int]:
+    values: set[int] = set()
+    for name in names:
+        for value in os.getenv(name, "").split(","):
+            value = value.strip()
+            if value.lstrip("-").isdigit():
+                values.add(int(value))
+    return values
+
+
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -65,21 +75,14 @@ ALLOW_CHANNEL_IDENTITY_COMMENTS = env_bool("ALLOW_CHANNEL_IDENTITY_COMMENTS", Tr
 ALLOW_LINKED_CHANNEL_FORWARDS = env_bool("ALLOW_LINKED_CHANNEL_FORWARDS", True)
 ALLOW_CHANNEL_MEDIA_WITH_LINKS = env_bool("ALLOW_CHANNEL_MEDIA_WITH_LINKS", True)
 
-WHITELIST_IDS = {
-    int(value.strip())
-    for value in (os.getenv("WHITELIST_IDS", "") + "," + os.getenv("ADMIN_IDS", "")).split(",")
-    if value.strip().lstrip("-").isdigit()
-}
+ADMIN_WHITELIST_IDS = env_id_set("ADMIN_WHITELIST_IDS", "ADMIN_IDS")
+WHITELIST_IDS = env_id_set("WHITELIST_IDS")
 WHITELIST_USERNAMES = {
     value.strip().lower().lstrip("@")
     for value in os.getenv("WHITELIST_USERNAMES", "").split(",")
     if value.strip()
 }
-TRUSTED_CHANNEL_IDS = {
-    int(value.strip())
-    for value in os.getenv("TRUSTED_CHANNEL_IDS", "").split(",")
-    if value.strip().lstrip("-").isdigit()
-}
+TRUSTED_CHANNEL_IDS = env_id_set("TRUSTED_CHANNEL_IDS")
 
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\ufeff\u2060]")
 URL_RE = re.compile(
@@ -360,6 +363,13 @@ def has_hidden_or_entity_link(message) -> bool:
     for entity in getattr(message, "entities", None) or []:
         if isinstance(entity, (MessageEntityUrl, MessageEntityTextUrl)):
             return True
+
+    reply_markup = getattr(message, "reply_markup", None)
+    for row in getattr(reply_markup, "rows", None) or []:
+        for button in getattr(row, "buttons", None) or []:
+            if getattr(button, "url", None):
+                return True
+
     return False
 
 
@@ -451,6 +461,13 @@ def normalized_peer_id(value) -> int | None:
             return None
 
 
+def id_in_set(value, values: set[int]) -> bool:
+    if value is None:
+        return False
+    normalized = normalized_peer_id(value)
+    return value in values or normalized in values
+
+
 def is_channel_post(message) -> bool:
     return ALLOW_CHANNEL_POSTS and bool(getattr(message, "post", False))
 
@@ -516,6 +533,25 @@ def is_linked_channel_forward(message) -> bool:
     )
 
 
+def is_linked_channel_discussion_post(chat_id: int, sender, message) -> bool:
+    if not is_linked_channel_forward(message):
+        return False
+
+    chat_peer_id = normalized_peer_id(chat_id)
+    sender_id = normalized_peer_id(getattr(sender, "id", None)) if sender is not None else None
+    message_sender = normalized_peer_id(message_sender_id(message))
+    from_peer = normalized_peer_id(message_peer_id(message, "from_id"))
+
+    return bool(
+        is_channel_identity_comment(sender)
+        or is_channel_identity_message(message)
+        or sender_id == chat_peer_id
+        or message_sender == chat_peer_id
+        or from_peer == chat_peer_id
+        or getattr(message, "post_author", None)
+    )
+
+
 def is_anonymous_admin_comment(chat_id: int, sender) -> bool:
     if not ALLOW_ANONYMOUS_ADMIN_COMMENTS or sender is None:
         return False
@@ -531,7 +567,6 @@ def is_anonymous_admin_message(chat_id: int, message) -> bool:
         normalized_peer_id(message_sender_id(message)) == chat_peer_id
         or normalized_peer_id(message_peer_id(message, "from_id")) == chat_peer_id
         or bool(getattr(message, "post_author", None))
-        or is_linked_channel_forward(message)
     )
 
 
@@ -558,21 +593,35 @@ def message_has_media(message) -> bool:
     )
 
 
-def is_channel_origin_message(message, sender=None) -> bool:
+def is_channel_origin_message(message, sender=None, chat_id: int | None = None) -> bool:
     return bool(
         is_channel_post(message)
         or is_channel_identity_message(message)
         or is_channel_identity_comment(sender)
-        or is_linked_channel_forward(message)
+        or (chat_id is not None and is_linked_channel_discussion_post(chat_id, sender, message))
         or getattr(message, "post_author", None)
     )
 
 
-def is_allowed_channel_media_post(message, sender=None) -> bool:
+def is_allowed_channel_media_post(message, sender=None, chat_id: int | None = None) -> bool:
     return (
         ALLOW_CHANNEL_MEDIA_WITH_LINKS
         and message_has_media(message)
-        and is_channel_origin_message(message, sender)
+        and is_channel_origin_message(message, sender, chat_id)
+    )
+
+
+def log_allowed_admin_post(chat_id: int, sender, message, reason: str) -> None:
+    logger.info(
+        "allowed admin post chat=%s msg=%s sender=%s message_sender=%s from_id=%s post=%s fwd_channel=%s reason=%s",
+        chat_id,
+        getattr(message, "id", None),
+        getattr(sender, "id", None),
+        message_sender_id(message) if message is not None else None,
+        getattr(message, "from_id", None) if message is not None else None,
+        getattr(message, "post", None) if message is not None else None,
+        forward_header_channel_id(message) if message is not None else None,
+        reason,
     )
 
 
@@ -675,32 +724,46 @@ class RateMemory:
 class AdminCache:
     def __init__(self, client: TelegramClient):
         self.client = client
-        self.cache: dict[tuple[int, int], tuple[float, bool]] = {}
+        self.cache: dict[tuple[int, int], tuple[float, bool, bool, bool]] = {}
 
     async def is_admin_or_whitelisted(self, chat_id: int, sender, message=None, chat=None) -> bool:
-        if message is not None and is_allowed_channel_media_post(message, sender):
-            logger.debug("allow channel media post chat=%s msg=%s", chat_id, getattr(message, "id", None))
-            return True
-
-        if message is not None and is_channel_post(message):
-            logger.debug("allow channel post chat=%s msg=%s", chat_id, getattr(message, "id", None))
-            return True
-
-        if is_anonymous_admin_comment(chat_id, sender) or is_anonymous_admin_message(chat_id, message):
-            logger.debug("allow anonymous admin chat=%s msg=%s", chat_id, getattr(message, "id", None))
-            return True
-
-        if is_channel_identity_comment(sender) or is_channel_identity_message(message):
-            logger.debug("allow channel identity chat=%s msg=%s", chat_id, getattr(message, "id", None))
-            return True
-
         user_id = getattr(sender, "id", None) if sender is not None else None
         if user_id is None and message is not None:
             user_id = message_sender_id(message)
 
+        if id_in_set(user_id, ADMIN_WHITELIST_IDS):
+            log_allowed_admin_post(chat_id, sender, message, "admin-whitelist")
+            return True
+
+        if message is not None and is_allowed_channel_media_post(message, sender, chat_id):
+            log_allowed_admin_post(chat_id, sender, message, "channel-media-post")
+            return True
+
+        if message is not None and is_channel_post(message):
+            log_allowed_admin_post(chat_id, sender, message, "channel-post")
+            return True
+
+        if is_anonymous_admin_comment(chat_id, sender) or is_anonymous_admin_message(chat_id, message):
+            log_allowed_admin_post(chat_id, sender, message, "anonymous-admin")
+            return True
+
+        if message is not None and is_linked_channel_discussion_post(chat_id, sender, message):
+            log_allowed_admin_post(chat_id, sender, message, "linked-channel-discussion-post")
+            return True
+
+        if is_channel_identity_comment(sender) or is_channel_identity_message(message):
+            log_allowed_admin_post(chat_id, sender, message, "channel-identity")
+            return True
+
         username = (getattr(sender, "username", "") or "").lower()
 
-        if user_id in WHITELIST_IDS or username in WHITELIST_USERNAMES:
+        if id_in_set(user_id, WHITELIST_IDS) or username in WHITELIST_USERNAMES:
+            logger.info(
+                "allowed whitelist post chat=%s msg=%s sender=%s reason=whitelist",
+                chat_id,
+                getattr(message, "id", None),
+                user_id,
+            )
             return True
         if user_id is None:
             return False
@@ -709,27 +772,42 @@ class AdminCache:
         now = time.monotonic()
         cached = self.cache.get(key)
         if cached and cached[0] > now:
-            return cached[1]
+            is_creator, is_admin, can_post = cached[1], cached[2], cached[3]
+        else:
+            try:
+                permissions = await self.client.get_permissions(chat or chat_id, sender or user_id)
+                is_creator = bool(getattr(permissions, "is_creator", False))
+                is_admin = bool(getattr(permissions, "is_admin", False))
+                can_post = bool(getattr(permissions, "post_messages", False))
+            except (ChatAdminRequiredError, UserAdminInvalidError):
+                is_creator = False
+                is_admin = False
+                can_post = False
+            except FloodWaitError as exc:
+                await sleep_for_flood_wait(exc)
+                return False
+            except Exception as exc:
+                logger.warning("admin check failed chat=%s user=%s error=%s", chat_id, user_id, exc)
+                is_creator = False
+                is_admin = False
+                can_post = False
 
-        try:
-            permissions = await self.client.get_permissions(chat or chat_id, sender or user_id)
-            is_admin = bool(
-                getattr(permissions, "is_admin", False)
-                or getattr(permissions, "is_creator", False)
-                or getattr(permissions, "post_messages", False)
+            cache_ttl = ADMIN_CACHE_TTL if (is_creator or is_admin or can_post) else min(ADMIN_CACHE_TTL, 30)
+            self.cache[key] = (now + cache_ttl, is_creator, is_admin, can_post)
+
+        if is_creator:
+            log_allowed_admin_post(chat_id, sender, message, "owner")
+            return True
+
+        if (is_admin or can_post) and not id_in_set(user_id, ADMIN_WHITELIST_IDS):
+            logger.debug(
+                "admin not in ADMIN_WHITELIST_IDS will be filtered chat=%s msg=%s sender=%s",
+                chat_id,
+                getattr(message, "id", None),
+                user_id,
             )
-        except (ChatAdminRequiredError, UserAdminInvalidError):
-            is_admin = False
-        except FloodWaitError as exc:
-            await sleep_for_flood_wait(exc)
-            return False
-        except Exception as exc:
-            logger.warning("admin check failed chat=%s user=%s error=%s", chat_id, user_id, exc)
-            is_admin = False
 
-        cache_ttl = ADMIN_CACHE_TTL if is_admin else min(ADMIN_CACHE_TTL, 30)
-        self.cache[key] = (now + cache_ttl, is_admin)
-        return is_admin
+        return False
 
 
 class DeleteQueue:
@@ -873,7 +951,6 @@ async def main() -> None:
                 logger.warning("failed to load chat entity chat=%s msg=%s error=%s", chat_id, message.id, exc)
 
         if await admin_cache.is_admin_or_whitelisted(chat_id, sender, message, chat):
-            logger.debug("allowed admin/whitelist message chat=%s msg=%s", chat_id, message.id)
             return
 
         user_id = getattr(sender, "id", None) or message_sender_id(message) or 0
