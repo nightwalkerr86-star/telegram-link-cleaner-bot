@@ -52,9 +52,7 @@ export BOT_TOKEN="your_bot_token"
 
 Optional settings:
 
-export ADMIN_WHITELIST_IDS="123456789,987654321"
 export WHITELIST_IDS="123456789,987654321"
-export ADMIN_IDS="123456789,987654321"
 export WHITELIST_USERNAMES="trusteduser,anothertrusteduser"
 export BOT_SPAM_ACTION="ban"
 export USER_SPAM_ACTION="mute"
@@ -77,9 +75,8 @@ The bot automatically checks Telegram permissions before running spam filters.
 Group owners, admins, anonymous admins, and linked channel posts can post hidden
 links, embedded links, button links, URL links, and promotional text without
 deletion. Admin status is cached for ADMIN_CACHE_TTL seconds, then refreshed.
-ADMIN_WHITELIST_IDS is optional and can be used as a manual emergency bypass
-list if Telegram cannot resolve an admin identity. ADMIN_IDS still works as an
-old alias. TRUSTED_CHANNEL_IDS accepts normal channel IDs and -100 channel IDs.
+No admin IDs need to be added manually. TRUSTED_CHANNEL_IDS accepts normal
+channel IDs and -100 channel IDs.
 
 STEP 5 - Start the bot
 

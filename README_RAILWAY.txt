@@ -28,9 +28,7 @@ RAILWAY HOSTING STEPS
    - BOT_TOKEN = your BotFather token
 
 7. Optional Railway Variables:
-   - ADMIN_WHITELIST_IDS = optional manual bypass admin user IDs
    - WHITELIST_IDS = comma-separated Telegram user IDs
-   - ADMIN_IDS = old alias for ADMIN_WHITELIST_IDS
    - WHITELIST_USERNAMES = comma-separated usernames without @
    - BOT_SPAM_ACTION = ban
    - USER_SPAM_ACTION = mute
@@ -50,8 +48,7 @@ RAILWAY HOSTING STEPS
    filters. Group owners, admins, anonymous admins, and linked channel posts can
    post hidden links, button links, URL links, and promotional text without
    deletion. Admin status is cached for ADMIN_CACHE_TTL seconds, then refreshed.
-   ADMIN_WHITELIST_IDS is optional and only needed as a manual bypass if
-   Telegram cannot resolve an admin identity.
+   No admin IDs need to be added manually.
 
 8. Start command:
    python bot.py

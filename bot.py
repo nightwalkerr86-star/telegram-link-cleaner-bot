@@ -81,7 +81,6 @@ ALLOW_CHANNEL_IDENTITY_COMMENTS = env_bool("ALLOW_CHANNEL_IDENTITY_COMMENTS", Tr
 ALLOW_LINKED_CHANNEL_FORWARDS = env_bool("ALLOW_LINKED_CHANNEL_FORWARDS", True)
 ALLOW_CHANNEL_MEDIA_WITH_LINKS = env_bool("ALLOW_CHANNEL_MEDIA_WITH_LINKS", True)
 
-ADMIN_WHITELIST_IDS = env_id_set("ADMIN_WHITELIST_IDS", "ADMIN_IDS")
 WHITELIST_IDS = env_id_set("WHITELIST_IDS")
 WHITELIST_USERNAMES = {
     value.strip().lower().lstrip("@")
@@ -736,10 +735,6 @@ class AdminCache:
         user_id = getattr(sender, "id", None) if sender is not None else None
         if user_id is None and message is not None:
             user_id = message_sender_id(message)
-
-        if id_in_set(user_id, ADMIN_WHITELIST_IDS):
-            log_allowed_admin_post(chat_id, sender, message, "admin-whitelist")
-            return True
 
         if message is not None and is_allowed_channel_media_post(message, sender, chat_id):
             log_allowed_admin_post(chat_id, sender, message, "channel-media-post")
