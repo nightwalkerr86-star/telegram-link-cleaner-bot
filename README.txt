@@ -5,7 +5,6 @@ This bot uses Telethon to protect large Telegram groups from spam bots.
 What it does:
 - deletes spam messages quickly with async batch deletion
 - detects fast flood spam
-- deletes repeated messages
 - detects hidden links, suspicious links, Chinese spam text, and promotional text
 - detects advertisement sentences, casino/gambling promotion, crypto scams, fake investment promotion, Telegram invite links, and suspicious URLs
 - detects sexual, adult, and abuse-related text in English, Chinese, and Khmer
@@ -13,7 +12,7 @@ What it does:
 - deletes forwarded messages from channels and bots
 - bans spam bots automatically by default
 - mutes non-admin spam users by default
-- ignores group admins and whitelisted users
+- ignores group admins, channel broadcast posts, admin-style comments, and whitelisted users
 - logs deleted spam to anti_spam.log and the terminal
 - catches Telegram FloodWait errors and waits safely
 
@@ -57,10 +56,11 @@ export WHITELIST_IDS="123456789,987654321"
 export WHITELIST_USERNAMES="trusteduser,anothertrusteduser"
 export BOT_SPAM_ACTION="ban"
 export USER_SPAM_ACTION="mute"
+export ALLOW_CHANNEL_POSTS="true"
+export ALLOW_ANONYMOUS_ADMIN_COMMENTS="true"
+export ALLOW_CHANNEL_IDENTITY_COMMENTS="true"
 export FLOOD_WINDOW_SECONDS="10"
 export FLOOD_MESSAGE_LIMIT="8"
-export REPEAT_WINDOW_SECONDS="120"
-export REPEAT_MESSAGE_LIMIT="3"
 export SIMILAR_WINDOW_SECONDS="300"
 export SIMILAR_MESSAGE_LIMIT="3"
 export SIMILARITY_THRESHOLD="0.72"
@@ -79,7 +79,7 @@ DEPLOYMENT NOTES
 
 TUNING FOR LARGE GROUPS
 - Lower FLOOD_MESSAGE_LIMIT to catch floods faster.
-- Lower SIMILARITY_THRESHOLD to catch more changed copy-paste promo text.
+- Lower SIMILARITY_THRESHOLD to catch more changed promotional text.
 - Raise SIMILARITY_THRESHOLD if it deletes too aggressively.
 - Raise DELETE_WORKERS if your group receives very heavy spam.
 - Keep DELETE_BATCH_SIZE at 100 or lower.

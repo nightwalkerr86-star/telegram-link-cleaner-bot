@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import logging
 import os
 import re
@@ -9,7 +8,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Deque
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 from telethon.errors import ChatAdminRequiredError, FloodWaitError, UserAdminInvalidError
 from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl
 
@@ -31,6 +30,13 @@ logging.basicConfig(
 logger = logging.getLogger("anti_spam")
 
 
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -44,8 +50,6 @@ MAX_FLOOD_WAIT = int(os.getenv("MAX_FLOOD_WAIT", "60"))
 
 FLOOD_WINDOW_SECONDS = int(os.getenv("FLOOD_WINDOW_SECONDS", "10"))
 FLOOD_MESSAGE_LIMIT = int(os.getenv("FLOOD_MESSAGE_LIMIT", "8"))
-REPEAT_WINDOW_SECONDS = int(os.getenv("REPEAT_WINDOW_SECONDS", "120"))
-REPEAT_MESSAGE_LIMIT = int(os.getenv("REPEAT_MESSAGE_LIMIT", "3"))
 RECENT_MESSAGE_TTL = int(os.getenv("RECENT_MESSAGE_TTL", "180"))
 MUTE_SECONDS = int(os.getenv("MUTE_SECONDS", "86400"))
 SIMILAR_WINDOW_SECONDS = int(os.getenv("SIMILAR_WINDOW_SECONDS", "300"))
@@ -55,6 +59,9 @@ RECENT_SIMILAR_LIMIT = int(os.getenv("RECENT_SIMILAR_LIMIT", "300"))
 
 BOT_SPAM_ACTION = os.getenv("BOT_SPAM_ACTION", "ban").lower()
 USER_SPAM_ACTION = os.getenv("USER_SPAM_ACTION", "mute").lower()
+ALLOW_CHANNEL_POSTS = env_bool("ALLOW_CHANNEL_POSTS", True)
+ALLOW_ANONYMOUS_ADMIN_COMMENTS = env_bool("ALLOW_ANONYMOUS_ADMIN_COMMENTS", True)
+ALLOW_CHANNEL_IDENTITY_COMMENTS = env_bool("ALLOW_CHANNEL_IDENTITY_COMMENTS", True)
 
 WHITELIST_IDS = {
     int(value.strip())
@@ -313,13 +320,6 @@ def message_text(message) -> str:
     return "\n".join(parts)
 
 
-def stable_text_hash(text: str) -> str:
-    compacted = compact_text(text)
-    if not compacted:
-        return ""
-    return hashlib.blake2b(compacted.encode("utf-8"), digest_size=12).hexdigest()
-
-
 def text_ngrams(value: str, size: int = 3) -> set[str]:
     compacted = compact_text(value)
     if not compacted:
@@ -431,6 +431,35 @@ def is_forwarded(message) -> bool:
     return bool(getattr(message, "fwd_from", None))
 
 
+def normalized_peer_id(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        real_id, _ = utils.resolve_id(int(value))
+        return real_id
+    except Exception:
+        try:
+            return abs(int(value))
+        except Exception:
+            return None
+
+
+def is_channel_post(message) -> bool:
+    return ALLOW_CHANNEL_POSTS and bool(getattr(message, "post", False))
+
+
+def is_anonymous_admin_comment(chat_id: int, sender) -> bool:
+    if not ALLOW_ANONYMOUS_ADMIN_COMMENTS or sender is None:
+        return False
+    return normalized_peer_id(getattr(sender, "id", None)) == normalized_peer_id(chat_id)
+
+
+def is_channel_identity_comment(sender) -> bool:
+    if not ALLOW_CHANNEL_IDENTITY_COMMENTS or sender is None:
+        return False
+    return bool(getattr(sender, "broadcast", False))
+
+
 def base_spam_decision(message) -> SpamDecision:
     text = message_text(message)
 
@@ -463,8 +492,6 @@ class RateMemory:
     def __init__(self):
         self.user_times: dict[tuple[int, int], Deque[float]] = defaultdict(deque)
         self.user_messages: dict[tuple[int, int], Deque[tuple[float, int]]] = defaultdict(deque)
-        self.user_repeats: dict[tuple[int, int, str], Deque[float]] = defaultdict(deque)
-        self.chat_repeats: dict[tuple[int, str], Deque[tuple[float, int]]] = defaultdict(deque)
         self.chat_similar_messages: dict[int, Deque[tuple[float, int, int, str]]] = defaultdict(deque)
 
     @staticmethod
@@ -491,24 +518,6 @@ class RateMemory:
 
         if len(times) >= FLOOD_MESSAGE_LIMIT:
             return SpamDecision(True, f"flood-{len(times)}-messages", True)
-
-        text_hash = stable_text_hash(text)
-        if not text_hash:
-            return SpamDecision(False, "clean")
-
-        repeat_key = (chat_id, user_id, text_hash)
-        repeats = self.user_repeats[repeat_key]
-        repeats.append(now)
-        self.prune_times(repeats, now - REPEAT_WINDOW_SECONDS)
-        if len(repeats) >= REPEAT_MESSAGE_LIMIT:
-            return SpamDecision(True, f"user-repeat-{len(repeats)}", True)
-
-        chat_key = (chat_id, text_hash)
-        chat_repeats = self.chat_repeats[chat_key]
-        chat_repeats.append((now, message_id))
-        self.prune_messages(chat_repeats, now - REPEAT_WINDOW_SECONDS)
-        if len(chat_repeats) >= max(REPEAT_MESSAGE_LIMIT + 1, 4):
-            return SpamDecision(True, f"chat-repeat-{len(chat_repeats)}", True)
 
         similar_messages = self.chat_similar_messages[chat_id]
         self.prune_messages(similar_messages, now - SIMILAR_WINDOW_SECONDS)
@@ -552,7 +561,16 @@ class AdminCache:
         self.client = client
         self.cache: dict[tuple[int, int], tuple[float, bool]] = {}
 
-    async def is_admin_or_whitelisted(self, chat_id: int, sender) -> bool:
+    async def is_admin_or_whitelisted(self, chat_id: int, sender, message=None) -> bool:
+        if message is not None and is_channel_post(message):
+            return True
+
+        if is_anonymous_admin_comment(chat_id, sender):
+            return True
+
+        if is_channel_identity_comment(sender):
+            return True
+
         if sender is None:
             return False
 
@@ -717,7 +735,7 @@ async def main() -> None:
         sender = await event.get_sender()
         user_id = getattr(sender, "id", 0) or 0
 
-        if await admin_cache.is_admin_or_whitelisted(chat_id, sender):
+        if await admin_cache.is_admin_or_whitelisted(chat_id, sender, message):
             return
 
         text = message_text(message)
@@ -735,7 +753,7 @@ async def main() -> None:
 
         await delete_queue.put(chat_id, message.id, decision.reason)
 
-        if decision.reason.startswith("flood") or decision.reason.startswith("user-repeat"):
+        if decision.reason.startswith("flood"):
             await delete_queue.put_many(
                 chat_id,
                 memory.recent_message_ids(chat_id, user_id),
