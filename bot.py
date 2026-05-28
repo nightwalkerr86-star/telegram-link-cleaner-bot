@@ -62,6 +62,7 @@ USER_SPAM_ACTION = os.getenv("USER_SPAM_ACTION", "mute").lower()
 ALLOW_CHANNEL_POSTS = env_bool("ALLOW_CHANNEL_POSTS", True)
 ALLOW_ANONYMOUS_ADMIN_COMMENTS = env_bool("ALLOW_ANONYMOUS_ADMIN_COMMENTS", True)
 ALLOW_CHANNEL_IDENTITY_COMMENTS = env_bool("ALLOW_CHANNEL_IDENTITY_COMMENTS", True)
+ALLOW_LINKED_CHANNEL_FORWARDS = env_bool("ALLOW_LINKED_CHANNEL_FORWARDS", True)
 
 WHITELIST_IDS = {
     int(value.strip())
@@ -72,6 +73,11 @@ WHITELIST_USERNAMES = {
     value.strip().lower().lstrip("@")
     for value in os.getenv("WHITELIST_USERNAMES", "").split(",")
     if value.strip()
+}
+TRUSTED_CHANNEL_IDS = {
+    int(value.strip())
+    for value in os.getenv("TRUSTED_CHANNEL_IDS", "").split(",")
+    if value.strip().lstrip("-").isdigit()
 }
 
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\ufeff\u2060]")
@@ -468,6 +474,47 @@ def message_sender_id(message) -> int | None:
     return normalized_peer_id(message_peer_id(message, "from_id"))
 
 
+def trusted_channel_id(channel_id: int | None) -> bool:
+    if channel_id is None:
+        return False
+    if not TRUSTED_CHANNEL_IDS:
+        return True
+    normalized = normalized_peer_id(channel_id)
+    return channel_id in TRUSTED_CHANNEL_IDS or normalized in TRUSTED_CHANNEL_IDS
+
+
+def forward_header_channel_id(message) -> int | None:
+    forward = getattr(message, "fwd_from", None)
+    if forward is None:
+        return None
+
+    for attr in ("from_id", "saved_from_peer", "saved_from_id"):
+        peer_id = message_peer_id(forward, attr)
+        if peer_id is not None:
+            return normalized_peer_id(peer_id)
+
+    return None
+
+
+def is_linked_channel_forward(message) -> bool:
+    if not ALLOW_LINKED_CHANNEL_FORWARDS or message is None:
+        return False
+
+    forward = getattr(message, "fwd_from", None)
+    if forward is None:
+        return False
+
+    channel_id = forward_header_channel_id(message)
+    if TRUSTED_CHANNEL_IDS:
+        return trusted_channel_id(channel_id)
+
+    return (
+        channel_id is not None
+        or bool(getattr(forward, "channel_post", None))
+        or bool(getattr(forward, "post_author", None))
+    )
+
+
 def is_anonymous_admin_comment(chat_id: int, sender) -> bool:
     if not ALLOW_ANONYMOUS_ADMIN_COMMENTS or sender is None:
         return False
@@ -483,6 +530,7 @@ def is_anonymous_admin_message(chat_id: int, message) -> bool:
         normalized_peer_id(message_sender_id(message)) == chat_peer_id
         or normalized_peer_id(message_peer_id(message, "from_id")) == chat_peer_id
         or bool(getattr(message, "post_author", None))
+        or is_linked_channel_forward(message)
     )
 
 
